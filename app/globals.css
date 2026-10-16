@@ -1,0 +1,123 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+::selection {
+  background: color-mix(in oklab, #10b981 35%, transparent);
+}
+
+/* Green baize for the game table: a soft top highlight over a deep green,
+   with a subtle vignette for depth. */
+.felt {
+  background-color: #0e5c3c;
+  background-image:
+    radial-gradient(120% 100% at 50% -10%, rgba(255, 255, 255, 0.16), transparent 55%),
+    radial-gradient(90% 70% at 50% 120%, rgba(0, 0, 0, 0.42), transparent 60%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.slide-up {
+  animation: slide-up 0.18s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+@keyframes deal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-1.25rem) rotate(-3deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(0deg);
+  }
+}
+.deal-card {
+  animation: deal-in 0.22s ease-out both;
+  will-change: transform, opacity;
+}
+
+/* The held fan: every card tilts around a pivot below the hand and drops by
+   an outward-growing lift, so the row bows into an arc rather than a flat
+   line. Hover or keyboard focus draws a card up out of the fan (see the hand
+   styles in GameTable); the tilt re-spreads smoothly when a card leaves the
+   hand. The stacked order stays put on hover, so nothing pops to the front. */
+.hand-fan-card {
+  transform: translateY(var(--fan-lift, 0px)) rotate(var(--fan-angle, 0deg));
+  transform-origin: 50% 180%;
+  z-index: var(--fan-z, 0);
+  transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* A played card dropping onto the felt. Transform only, so the optimistic
+   echo's own `opacity` keeps applying and confirming it never re-runs. */
+@keyframes card-in {
+  from {
+    transform: scale(0.88) translateY(0.4rem);
+  }
+  to {
+    transform: scale(1) translateY(0);
+  }
+}
+.card-in {
+  animation: card-in 0.18s ease-out both;
+}
+
+/* Keep the interface still for anyone who asks for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .slide-up,
+  .fade-in,
+  .deal-card,
+  .card-in {
+    animation: none;
+  }
+  .hand-fan-card {
+    transition: none;
+  }
+}
