@@ -1,0 +1,78 @@
+# Snapshot diff for this task (before -> now)
+
+diff -ruN .superpowers/sdd/belote-live-game/task-7/before/server/actions.ts /Users/Rosen/WebstormProjects/belote/server/actions.ts
+--- .superpowers/sdd/belote-live-game/task-7/before/server/actions.ts	2026-10-12 14:05:51
++++ /Users/Rosen/WebstormProjects/belote/server/actions.ts	2026-10-15 09:09:45
+@@ -13,6 +13,7 @@
+ } from "@/server/Rooms";
+ import type { Team } from "@/server/definitions";
+ import { getOrCreatePlayerId } from "@/server/player";
++import { broadcast } from "@/server/rooms/broadcast";
+ 
+ const MAX_NAME_LENGTH = 24;
+ 
+@@ -22,6 +23,15 @@
+     .slice(0, MAX_NAME_LENGTH);
+ }
+ 
++/** A seed may be supplied for reproducible local games; ignored in production. */
++function devSeed(formData: FormData): number | undefined {
++  if (process.env.NODE_ENV === "production") return undefined;
++  const raw = String(formData.get("seed") ?? "").trim();
++  if (!raw) return undefined;
++  const value = Number(raw);
++  return Number.isFinite(value) ? value : undefined;
++}
++
+ export type JoinRoomState = { error: string } | null;
+ 
+ export async function joinRoomAction(
+@@ -56,6 +66,8 @@
+     return { error: "Room is full" };
+   }
+ 
++  broadcast(room);
++
+   redirect(`/room/${room.code}`);
+ }
+ 
+@@ -72,10 +84,12 @@
+   }
+ 
+   const playerId = await getOrCreatePlayerId();
+-  const room = createRoom();
++  const room = createRoom(devSeed(formData));
+ 
+   joinRoom(room, playerId, name);
+ 
++  broadcast(room);
++
+   redirect(`/room/${room.code}`);
+ }
+ 
+@@ -113,6 +127,8 @@
+     return { error: "You are not in this room" };
+   }
+ 
++  broadcast(room);
++
+   return null;
+ }
+ 
+@@ -142,6 +158,8 @@
+     return { error: "All players must choose a team first" };
+   }
+ 
++  broadcast(room);
++
+   return null;
+ }
+ 
+@@ -152,6 +170,7 @@
+   if (room) {
+     const playerId = await getOrCreatePlayerId();
+     leaveRoom(room, playerId);
++    broadcast(room);
+   }
+ 
+   redirect("/");

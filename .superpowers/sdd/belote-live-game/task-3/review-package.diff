@@ -1,0 +1,132 @@
+# Snapshot diff for this task (before -> now)
+
+diff -ruN .superpowers/sdd/belote-live-game/task-3/before/server/Rooms.test.ts /Users/Rosen/WebstormProjects/belote/server/Rooms.test.ts
+--- .superpowers/sdd/belote-live-game/task-3/before/server/Rooms.test.ts	2026-10-14 17:16:00
++++ /Users/Rosen/WebstormProjects/belote/server/Rooms.test.ts	2026-10-14 17:38:03
+@@ -10,6 +10,7 @@
+   touchPlayer,
+   sweepStalePlayers,
+   leaveRoom,
++  applyGameAction,
+   HEARTBEAT_TIMEOUT_MS,
+ } from "./Rooms.ts";
+ 
+@@ -315,4 +316,70 @@
+ 
+   assert.equal(a.rng(), b.rng());
+   assert.equal(a.rng(), b.rng());
++});
++
++/** Starts a seeded four-player room with teams A B A B in join order. */
++function startedRoom(seed = 1) {
++  const room = createRoom(seed);
++  const ids = ["p0", "p1", "p2", "p3"];
++  const teams = ["A", "B", "A", "B"] as const;
++
++  ids.forEach((id, index) => {
++    joinRoom(room, id, id.toUpperCase());
++    chooseTeam(room, id, teams[index]);
++  });
++  assert.deepEqual(startGame(room, "p0"), { ok: true });
++
++  return { room, ids };
++}
++
++test("startGame deals a fresh match seated by team", () => {
++  const { room } = startedRoom();
++
++  assert.ok(room.match);
++  assert.equal(room.match!.hand.phase, "bidding");
++  assert.deepEqual(room.match!.seats, ["p0", "p1", "p2", "p3"]);
++  assert.equal(room.match!.scores.A, 0);
++});
++
++test("the same seed deals the same opening hand", () => {
++  const a = startedRoom(99);
++  const b = startedRoom(99);
++
++  assert.deepEqual(a.room.match!.hand, b.room.match!.hand);
++});
++
++test("applyGameAction rejects an action before the game starts", () => {
++  const room = createRoom();
++
++  const result = applyGameAction(room, { kind: "pass", playerId: "p0" });
++
++  assert.deepEqual(result, { ok: false, error: "not_started" });
++});
++
++test("applyGameAction records a legal bid and advances the turn", () => {
++  const { room } = startedRoom();
++  const opener = room.match!.seats[1]; // the player after the dealer
++
++  const result = applyGameAction(room, {
++    kind: "bid",
++    playerId: opener,
++    contract: { kind: "suit", suit: "clubs" },
++  });
++
++  assert.deepEqual(result, { ok: true });
++  assert.deepEqual((room.match!.hand as { top: unknown }).top, {
++    kind: "suit",
++    suit: "clubs",
++  });
++});
++
++test("a second action out of turn is rejected without corrupting the match", () => {
++  const { room } = startedRoom();
++  const opener = room.match!.seats[1];
++
++  applyGameAction(room, { kind: "pass", playerId: opener });
++  const second = applyGameAction(room, { kind: "pass", playerId: opener });
++
++  assert.deepEqual(second, { ok: false, error: "not_your_turn" });
+ });
+\ No newline at end of file
+diff -ruN .superpowers/sdd/belote-live-game/task-3/before/server/Rooms.ts /Users/Rosen/WebstormProjects/belote/server/Rooms.ts
+--- .superpowers/sdd/belote-live-game/task-3/before/server/Rooms.ts	2026-10-14 17:24:02
++++ /Users/Rosen/WebstormProjects/belote/server/Rooms.ts	2026-10-14 17:38:13
+@@ -1,6 +1,7 @@
+-import { seededRng } from "./game/index.ts";
++import { applyAction, createMatch, seededRng, type Action, type Reason } from "./game/index.ts";
+ import type { Player, Room, Team } from "./definitions";
+ import { HEARTBEAT_TIMEOUT_MS, MAX_PLAYERS, MAX_PLAYERS_PER_TEAM } from "./rooms/constants.ts";
++import { seatPlayers } from "./rooms/view.ts";
+ 
+ export { HEARTBEAT_TIMEOUT_MS, MAX_PLAYERS, MAX_PLAYERS_PER_TEAM };
+ 
+@@ -115,7 +116,34 @@
+     return { ok: false, reason: "teams_incomplete" };
+   }
+ 
++  room.match = createMatch(seatPlayers(room.game.players), room.rng);
+   room.game.playing = true;
++  return { ok: true };
++}
++
++export type GameActionError = Reason | "not_started";
++
++export type GameActionResult =
++  | { ok: true }
++  | { ok: false; error: GameActionError };
++
++/**
++ * Applies a validated engine action to the room's match and stores the result.
++ * The caller is responsible for having resolved `action.playerId` from the
++ * player's cookie.
++ */
++export function applyGameAction(room: Room, action: Action): GameActionResult {
++  if (!room.match) {
++    return { ok: false, error: "not_started" };
++  }
++
++  const result = applyAction(room.match, action, room.rng);
++
++  if (result.error) {
++    return { ok: false, error: result.error };
++  }
++
++  room.match = result.match;
+   return { ok: true };
+ }
+ 

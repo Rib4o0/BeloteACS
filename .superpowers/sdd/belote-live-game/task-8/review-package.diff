@@ -1,0 +1,411 @@
+# Snapshot diff for this task (before -> now)
+
+diff -ruN .superpowers/sdd/belote-live-game/task-8/before/components/RoomLobby.tsx /Users/Rosen/WebstormProjects/belote/components/RoomLobby.tsx
+--- .superpowers/sdd/belote-live-game/task-8/before/components/RoomLobby.tsx	2026-10-12 14:12:09
++++ /Users/Rosen/WebstormProjects/belote/components/RoomLobby.tsx	2026-10-15 09:13:14
+@@ -1,9 +1,10 @@
+ "use client";
+ 
+-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
++import { useEffect, useState, useTransition } from "react";
+ 
+ import { chooseTeamAction, leaveRoomAction, startGameAction } from "@/server/actions";
+ import type { Team } from "@/server/definitions";
++import type { RoomView } from "@/server/rooms/view";
+ import RoomCodeModal from "./RoomCodeModal";
+ import {
+   allTeamsPicked,
+@@ -12,6 +13,7 @@
+   SEAT_COUNT,
+   type LobbyPlayer,
+ } from "./lobby";
++import { useRoomStream } from "./useRoomStream";
+ 
+ const TEAMS: Team[] = ["A", "B"];
+ 
+@@ -38,62 +40,34 @@
+ export default function RoomLobby({
+   code,
+   currentPlayerId,
+-  initialPlaying,
+-  initialPlayers,
++  initial,
+ }: {
+   code: string;
+   currentPlayerId: string | undefined;
+-  initialPlaying: boolean;
+-  initialPlayers: LobbyPlayer[];
++  initial: RoomView;
+ }) {
+-  const [players, setPlayers] = useState<LobbyPlayer[]>(initialPlayers);
+-  const [playing, setPlaying] = useState<boolean>(initialPlaying);
++  const { room, connected } = useRoomStream(code, initial);
++  const [pendingTeam, setPendingTeam] = useState<Team | null>(null);
++  const [starting, setStarting] = useState(false);
+   const [teamError, setTeamError] = useState<string | null>(null);
+   const [startError, setStartError] = useState<string | null>(null);
+   const [teamPending, startTeamTransition] = useTransition();
+   const [startPending, startStartTransition] = useTransition();
+-  const mounted = useRef(true);
+ 
++  // Drop the optimistic team pick once the server echoes it back.
+   useEffect(() => {
+-    mounted.current = true;
+-    return () => {
+-      mounted.current = false;
+-    };
+-  }, []);
++    if (!pendingTeam || !currentPlayerId) return;
++    const mine = room.players.find((player) => player.id === currentPlayerId);
++    if (mine?.team === pendingTeam) setPendingTeam(null);
++  }, [room, pendingTeam, currentPlayerId]);
+ 
+-  const refresh = useCallback(async () => {
+-    try {
+-      const response = await fetch(`/api/rooms/${code}/players`, {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json" },
+-        body: JSON.stringify({ playerId: currentPlayerId ?? null }),
+-      });
+-
+-      if (!response.ok) {
+-        return;
+-      }
+-
+-      const data = await response.json();
+-
+-      if (mounted.current) {
+-        setPlayers(data.players);
+-        setPlaying(data.playing);
+-      }
+-    } catch {
+-      // Transient polling failure; try again on the next tick.
+-    }
+-  }, [code, currentPlayerId]);
+-
+-  useEffect(() => {
+-    refresh();
+-    const interval = setInterval(refresh, 2000);
+-
+-    return () => clearInterval(interval);
+-  }, [refresh]);
+-
++  const players =
++    pendingTeam && currentPlayerId
++      ? assignTeam(room.players, currentPlayerId, pendingTeam)
++      : room.players;
++  // Before the first match frame arrives, keep showing the "dealing" state.
++  const playing = room.playing || (starting && room.match === null);
+   const me = players.find((player) => player.id === currentPlayerId);
+-  // Host role follows the live player list so a transferred host picks up the
+-  // role (Start button + room code) as soon as the poll reports the change.
+   const amHost = me?.host ?? false;
+   const teamsReady = allTeamsPicked(players);
+   const canStart = !playing && teamsReady;
+@@ -103,13 +77,9 @@
+     ).length >= 2;
+ 
+   function pickTeam(team: Team) {
+-    if (!currentPlayerId || teamPending) {
+-      return;
+-    }
+-
+-    // Optimistic: reflect the choice immediately, then persist.
++    if (!currentPlayerId || teamPending) return;
+     setTeamError(null);
+-    setPlayers((current) => assignTeam(current, currentPlayerId, team));
++    setPendingTeam(team);
+ 
+     const formData = new FormData();
+     formData.set("code", code);
+@@ -117,36 +87,27 @@
+ 
+     startTeamTransition(async () => {
+       const result = await chooseTeamAction(null, formData);
+-
+       if (result?.error) {
+         setTeamError(result.error);
++        setPendingTeam(null);
+       }
+-
+-      await refresh();
+     });
+   }
+ 
+   function startGame() {
+-    if (startPending || !canStart) {
+-      return;
+-    }
+-
+-    // Optimistic: show the started screen immediately, then persist.
++    if (startPending || !canStart) return;
+     setStartError(null);
+-    setPlaying(true);
++    setStarting(true);
+ 
+     const formData = new FormData();
+     formData.set("code", code);
+ 
+     startStartTransition(async () => {
+       const result = await startGameAction(null, formData);
+-
+       if (result?.error) {
+         setStartError(result.error);
+-        setPlaying(false);
++        setStarting(false);
+       }
+-
+-      await refresh();
+     });
+   }
+ 
+@@ -182,47 +143,12 @@
+     );
+   }
+ 
+-  function PlayerRow({ player }: { player: LobbyPlayer }) {
+-    return (
+-      <li key={player.id} className="flex items-center gap-2 text-sm">
+-        <span>{player.name}</span>
+-        {player.host ? hostBadge() : null}
+-        {player.team ? <TeamBadge team={player.team} /> : null}
+-        {player.connected ? null : (
+-          <span className="text-xs text-zinc-400">away</span>
+-        )}
+-        {player.id === currentPlayerId ? (
+-          <span className="text-zinc-500">(you)</span>
+-        ) : null}
+-      </li>
+-    );
+-  }
+-
+   if (playing) {
+-    return (
+-      <div className="flex flex-col gap-3">
+-        <h2 className="text-lg font-bold">Game started</h2>
+-        <div className="grid gap-4 sm:grid-cols-2">
+-          {TEAMS.map((team) => (
+-            <div
+-              key={team}
+-              className="rounded-md border border-zinc-300 p-3 dark:border-zinc-700"
+-            >
+-              <h3 className="mb-2 text-sm font-semibold">
+-                {team === "A" ? "Team A" : "Team B"}
+-              </h3>
+-              <ul className="flex flex-col gap-1">
+-                {players
+-                  .filter((player) => player.team === team)
+-                  .map((player) => (
+-                    <PlayerRow key={player.id} player={player} />
+-                  ))}
+-              </ul>
+-            </div>
+-          ))}
+-        </div>
+-        <p className="text-sm text-zinc-500">The game engine is coming soon.</p>
+-      </div>
++    return room.match ? (
++      // GameTable arrives in Task 11; placeholder until then.
++      <p className="text-sm text-zinc-500">The game is starting…</p>
++    ) : (
++      <p className="text-sm text-zinc-500">Dealing…</p>
+     );
+   }
+ 
+@@ -237,6 +163,10 @@
+   return (
+     <div className="flex flex-col gap-4">
+       <p className="text-sm text-zinc-500">{status}</p>
++
++      {connected ? null : (
++        <p className="text-xs text-amber-600">Reconnecting…</p>
++      )}
+ 
+       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+         {slots.map((player, index) =>
+@@ -321,4 +251,4 @@
+       {amHost ? <RoomCodeModal code={code} /> : null}
+     </div>
+   );
+-}
+\ No newline at end of file
++}
+diff -ruN .superpowers/sdd/belote-live-game/task-8/before/components/useRoomStream.ts /Users/Rosen/WebstormProjects/belote/components/useRoomStream.ts
+--- .superpowers/sdd/belote-live-game/task-8/before/components/useRoomStream.ts	1970-01-01 02:00:00
++++ /Users/Rosen/WebstormProjects/belote/components/useRoomStream.ts	2026-10-15 09:12:39
+@@ -0,0 +1,37 @@
++"use client";
++
++import { useEffect, useState } from "react";
++
++import type { RoomView } from "@/server/rooms/view";
++
++/** Subscribes to the room's SSE stream, seeded with the server-rendered view. */
++export function useRoomStream(
++  code: string,
++  initial: RoomView,
++): { room: RoomView; connected: boolean } {
++  const [room, setRoom] = useState<RoomView>(initial);
++  const [connected, setConnected] = useState(false);
++
++  useEffect(() => {
++    const source = new EventSource(`/api/rooms/${code}/stream`);
++
++    const onState = (event: MessageEvent) => {
++      try {
++        setRoom(JSON.parse(event.data) as RoomView);
++      } catch {
++        // Ignore a malformed frame; the next one will correct us.
++      }
++    };
++
++    source.addEventListener("state", onState as EventListener);
++    source.onopen = () => setConnected(true);
++    source.onerror = () => setConnected(false);
++
++    return () => {
++      source.removeEventListener("state", onState as EventListener);
++      source.close();
++    };
++  }, [code]);
++
++  return { room, connected };
++}
+diff -ruN .superpowers/sdd/belote-live-game/task-8/before/app/api/rooms/[code]/players/route.ts /Users/Rosen/WebstormProjects/belote/app/api/rooms/[code]/players/route.ts
+--- .superpowers/sdd/belote-live-game/task-8/before/app/api/rooms/[code]/players/route.ts	2026-10-12 14:05:51
++++ /Users/Rosen/WebstormProjects/belote/app/api/rooms/[code]/players/route.ts	1970-01-01 02:00:00
+@@ -1,48 +0,0 @@
+-import { connection } from "next/server";
+-
+-import {
+-  findRoom,
+-  HEARTBEAT_TIMEOUT_MS,
+-  MAX_PLAYERS,
+-  sweepStalePlayers,
+-  touchPlayer,
+-} from "@/server/Rooms";
+-
+-export async function POST(
+-  request: Request,
+-  context: { params: Promise<{ code: string }> },
+-) {
+-  await connection();
+-
+-  const { code } = await context.params;
+-  const room = findRoom(code);
+-
+-  if (!room) {
+-    return Response.json({ error: "Room not found" }, { status: 404 });
+-  }
+-
+-  const body = await request.json().catch(() => null);
+-  const now = Date.now();
+-
+-  sweepStalePlayers(room, now);
+-
+-  const playerId = body?.playerId;
+-
+-  if (typeof playerId === "string" && playerId) {
+-    touchPlayer(room, playerId, now);
+-  }
+-
+-  return Response.json({
+-    playing: room.game.playing,
+-    full: room.game.players.length >= MAX_PLAYERS,
+-    players: room.game.players.map((player) => ({
+-      id: player.id,
+-      name: player.name,
+-      host: player.host,
+-      team: player.team ?? null,
+-      connected: !room.game.playing
+-        ? true
+-        : now - (player.lastSeen ?? 0) <= HEARTBEAT_TIMEOUT_MS,
+-    })),
+-  });
+-}
+\ No newline at end of file
+diff -ruN .superpowers/sdd/belote-live-game/task-8/before/app/room/[code]/page.tsx /Users/Rosen/WebstormProjects/belote/app/room/[code]/page.tsx
+--- .superpowers/sdd/belote-live-game/task-8/before/app/room/[code]/page.tsx	2026-10-12 14:18:38
++++ /Users/Rosen/WebstormProjects/belote/app/room/[code]/page.tsx	2026-10-15 09:12:35
+@@ -2,53 +2,41 @@
+ import { connection } from "next/server";
+ 
+ import RoomLobby from "@/components/RoomLobby";
+-import { findRoom, HEARTBEAT_TIMEOUT_MS } from "@/server/Rooms";
++import { findRoom } from "@/server/Rooms";
+ import { getPlayerId } from "@/server/player";
++import { buildRoomView } from "@/server/rooms/view";
+ 
+ type RoomPageProps = {
+-    params: Promise<{code: string}>;
++  params: Promise<{ code: string }>;
+ };
+ 
+ export default function RoomPage(props: RoomPageProps) {
+-    return (
+-        <Suspense fallback={<div>Loading</div>}>
+-            <RoomContent params={props.params} />
+-        </Suspense>
+-    );
++  return (
++    <Suspense fallback={<div>Loading</div>}>
++      <RoomContent params={props.params} />
++    </Suspense>
++  );
+ }
+ 
+ async function RoomContent(props: RoomPageProps) {
+-    // Render at request time: this page reads the live in-memory room state.
+-    await connection();
++  // Render at request time: this page reads the live in-memory room state.
++  await connection();
+ 
+-    const params = await props.params;
+-    const code = params.code;
++  const { code } = await props.params;
++  const playerId = await getPlayerId();
++  const room = findRoom(code);
++  const initial = room ? buildRoomView(room, playerId ?? null) : null;
+ 
+-    const playerId = await getPlayerId();
+-    const room = findRoom(code);
+-    const players = room?.game.players ?? [];
+-
+-    return (
+-        <>
+-            <div className="p-4">
+-                <h1 className="text-xl font-bold">Room {code}</h1>
+-                <div className="mt-4">
+-                    <RoomLobby
+-                        code={code}
+-                        currentPlayerId={playerId}
+-                        initialPlaying={room?.game.playing ?? false}
+-                        initialPlayers={players.map((player) => ({
+-                            id: player.id,
+-                            name: player.name,
+-                            host: player.host,
+-                            team: player.team ?? null,
+-                            connected:
+-                                Date.now() - (player.lastSeen ?? 0) <=
+-                                HEARTBEAT_TIMEOUT_MS,
+-                        }))}
+-                    />
+-                </div>
+-            </div>
+-        </>
+-    );
+-}
+\ No newline at end of file
++  return (
++    <div className="p-4">
++      <h1 className="text-xl font-bold">Room {code}</h1>
++      <div className="mt-4">
++        {initial ? (
++          <RoomLobby code={code} currentPlayerId={playerId} initial={initial} />
++        ) : (
++          <p className="text-sm text-red-600">Room not found.</p>
++        )}
++      </div>
++    </div>
++  );
++}

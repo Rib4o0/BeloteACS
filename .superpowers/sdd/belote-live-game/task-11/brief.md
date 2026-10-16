@@ -1,0 +1,251 @@
+### Task 11: The `GameTable` component
+
+**Files:**
+- Create: `components/GameTable.tsx`
+- Modify: `components/RoomLobby.tsx` (swap the placeholder for `<GameTable/>`)
+
+**Interfaces:**
+- Consumes: `RoomPlayer`, `PublicMatch`, `useRoomStream` (via the container), `table.ts` helpers, `POST /api/rooms/[code]/actions`.
+- Produces: `GameTable({ code, players, match })`.
+
+- [ ] **Step 1: Create `components/GameTable.tsx`**
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+
+import type { Card, PublicMatch, Seat } from "@/server/game/index.ts";
+import type { RoomPlayer } from "@/server/rooms/view";
+import { cardLabel, contractLabel, isPlayable } from "./table";
+
+// Kept local so the client bundle never imports engine *values*.
+const SEATS: Seat[] = [0, 1, 2, 3];
+
+export default function GameTable({
+  code,
+  players,
+  match,
+}: {
+  code: string;
+  players: RoomPlayer[];
+  match: PublicMatch;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState(false);
+  const [optimisticCard, setOptimisticCard] = useState<Card | null>(null);
+
+  // Clear any optimistic echo as soon as fresh server state arrives.
+  useEffect(() => {
+    setOptimisticCard(null);
+    setPending(false);
+  }, [match]);
+
+  const you = match.you;
+  const nameOf = (seat: Seat) =>
+    players.find((player) => player.id === match.seats[seat])?.name ?? "—";
+  const awayOf = (seat: Seat) =>
+    players.find((player) => player.id === match.seats[seat])?.connected === false;
+
+  async function send(action: unknown, optimistic?: Card) {
+    if (pending) return;
+    setError(null);
+    setPending(true);
+    if (optimistic) setOptimisticCard(optimistic);
+
+    try {
+      const response = await fetch(`/api/rooms/${code}/actions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const data = await response.json();
+      if (!data.ok) {
+        setError(describe(data.error));
+        setOptimisticCard(null);
+      }
+    } catch {
+      setError("Could not reach the server");
+      setOptimisticCard(null);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const isYourTurn = you !== null && match.hand.turn === you;
+  const bidding = match.hand.phase === "bidding";
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Scoreboard match={match} />
+
+      {match.winner ? (
+        <p className="rounded-md bg-emerald-100 p-3 text-sm font-medium text-emerald-800">
+          Game over — Team {match.winner} wins.
+        </p>
+      ) : null}
+
+      <div className="rounded-md border border-zinc-300 p-3 dark:border-zinc-700">
+        <div className="text-xs text-zinc-500">
+          {bidding
+            ? `Bidding — top: ${contractLabel(match.hand.top)}${
+                match.hand.topBidder !== null
+                  ? ` by ${nameOf(match.hand.topBidder)}`
+                  : ""
+              }`
+            : `Contract: ${contractLabel(match.hand.contract)} by ${
+                match.hand.taker !== null ? nameOf(match.hand.taker) : "—"
+              }`}
+        </div>
+        <div className="mt-1 flex flex-wrap gap-2">
+          {(match.hand.trick ?? []).map((play) => (
+            <span
+              key={`${play.seat}-${play.card.suit}-${play.card.rank}`}
+              className="rounded border px-2 py-1 text-sm"
+            >
+              {nameOf(play.seat)}: {cardLabel(play.card)}
+            </span>
+          ))}
+          {optimisticCard ? (
+            <span className="rounded border border-dashed px-2 py-1 text-sm text-zinc-400">
+              you: {cardLabel(optimisticCard)}
+            </span>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2 text-center text-sm">
+        {SEATS.filter((seat) => seat !== you).map((seat) => (
+          <div key={seat} className="rounded border p-2 dark:border-zinc-700">
+            <div className="font-medium">{nameOf(seat)}</div>
+            <div className="text-xs text-zinc-500">
+              {match.hand.cardsLeft[seat]} cards
+              {awayOf(seat) ? " · away" : ""}
+              {match.hand.turn === seat ? " · to play" : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {bidding && isYourTurn ? (
+        <div className="flex flex-wrap gap-2">
+          {match.legal
+            .filter((action) => action.kind === "bid")
+            .map((action) => (
+              <button
+                key={action.contract.kind === "suit" ? action.contract.suit : action.contract.kind}
+                type="button"
+                disabled={pending}
+                onClick={() => send({ kind: "bid", contract: action.contract })}
+                className="rounded-md border px-3 py-1.5 text-sm dark:border-zinc-700"
+              >
+                {contractLabel(action.contract)}
+              </button>
+            ))}
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => send({ kind: "pass" })}
+            className="rounded-md border px-3 py-1.5 text-sm dark:border-zinc-700"
+          >
+            Pass
+          </button>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {(match.hand.hand ?? [])
+          .filter(
+            (card) =>
+              !optimisticCard ||
+              card.suit !== optimisticCard.suit ||
+              card.rank !== optimisticCard.rank,
+          )
+          .map((card) => {
+            const playable = isYourTurn && !bidding && isPlayable(card, match.legal);
+            return (
+              <button
+                key={`${card.suit}-${card.rank}`}
+                type="button"
+                disabled={!playable || pending}
+                onClick={() =>
+                  send({ kind: "play", card }, card)
+                }
+                className={`rounded border px-3 py-2 text-sm ${
+                  playable
+                    ? "border-zinc-400 dark:border-zinc-500"
+                    : "opacity-40"
+                }`}
+              >
+                {cardLabel(card)}
+              </button>
+            );
+          })}
+      </div>
+
+      {error ? (
+        <p role="alert" className="text-sm text-red-600">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function Scoreboard({ match }: { match: PublicMatch }) {
+  return (
+    <div className="flex flex-wrap items-center gap-4 text-sm">
+      <span className="font-medium">Team A {match.scores.A}</span>
+      <span className="font-medium">Team B {match.scores.B}</span>
+      <span className="text-zinc-500">Hand {match.handNumber}</span>
+      {match.lastOutcome ? (
+        <span className="text-zinc-500">
+          Last hand: A {match.lastOutcome.raw.A} · B {match.lastOutcome.raw.B}
+          {match.lastOutcome.capot ? ` · capot ${match.lastOutcome.capot}` : ""}
+          {match.lastOutcome.dedans ? " · dedans" : ""}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function describe(error: string): string {
+  const messages: Record<string, string> = {
+    not_your_turn: "It's not your turn",
+    card_not_held: "You don't hold that card",
+    card_not_legal: "That card can't be played",
+    bid_too_weak: "That bid is too low",
+    wrong_phase: "Not allowed right now",
+    game_over: "The game is over",
+    not_a_player: "You are not in this game",
+    not_started: "The game has not started",
+    bad_request: "That move was rejected",
+    room_not_found: "This room no longer exists",
+  };
+  return messages[error] ?? "That move was rejected";
+}
+```
+
+- [ ] **Step 2: Swap in the table** — in `components/RoomLobby.tsx`, replace the temporary "Game started" placeholder with:
+
+```tsx
+if (playing) {
+  return room.match ? (
+    <GameTable code={code} players={players} match={room.match} />
+  ) : (
+    <p className="text-sm text-zinc-500">Dealing…</p>
+  );
+}
+```
+
+and add `import GameTable from "./GameTable";`.
+
+- [ ] **Step 3: Typecheck and build**
+
+Run: `npm run typecheck` → clean.
+Run: `npm run build` → succeeds.
+
+- [ ] **Step 4: Checkpoint.**
+
+---
+

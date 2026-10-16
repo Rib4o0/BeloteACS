@@ -1,0 +1,18 @@
+# Snapshot diff for this task (before -> now)
+
+diff -ruN .superpowers/sdd/belote-live-game/task-3/fix-before/server/Rooms.test.ts /Users/Rosen/WebstormProjects/belote/server/Rooms.test.ts
+--- .superpowers/sdd/belote-live-game/task-3/fix-before/server/Rooms.test.ts	2026-10-14 17:38:03
++++ /Users/Rosen/WebstormProjects/belote/server/Rooms.test.ts	2026-10-14 17:45:46
+@@ -379,7 +379,11 @@
+   const opener = room.match!.seats[1];
+ 
+   applyGameAction(room, { kind: "pass", playerId: opener });
++  const before = room.match;
++  const snapshot = structuredClone(before);
+   const second = applyGameAction(room, { kind: "pass", playerId: opener });
+ 
+   assert.deepEqual(second, { ok: false, error: "not_your_turn" });
++  assert.equal(room.match, before); // same reference
++  assert.deepEqual(room.match, snapshot); // and unchanged in place
+ });
+\ No newline at end of file
